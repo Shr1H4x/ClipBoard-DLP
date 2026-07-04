@@ -1,0 +1,2 @@
+[console_scripts]
+clipboard-dlp = clipboard_dlp.cli:main

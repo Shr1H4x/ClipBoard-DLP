@@ -1,0 +1,9 @@
+click>=8.0
+pyperclip
+pystray
+psutil
+pydantic
+PyYAML
+pytest
+pillow
+

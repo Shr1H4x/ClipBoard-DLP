@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipboard-dlp"
+version = "0.1.0"
+description = "Clipboard Data Leakage Prevention Tool — prototype"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "pyperclip",
+    "pystray",
+    "psutil",
+    "pydantic",
+    "PyYAML",
+    "pytest"
+]
+
+[project.scripts]
+clipboard-dlp = "clipboard_dlp.cli:main"
