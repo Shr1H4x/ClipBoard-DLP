@@ -17,7 +17,9 @@ class ClipDB:
         self._init()
         # Restrict DB file permissions to owner-read/write where supported.
         try:
-            os.chmod(self.path, 0o600)
+            # POSIX-style permissions; skip on Windows where chmod semantics differ.
+            if os.name != 'nt':
+                os.chmod(self.path, 0o600)
         except Exception:
             # Best-effort; ignore failures on platforms that don't support chmod.
             pass

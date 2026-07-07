@@ -14,11 +14,12 @@ try:
 except Exception:
     pyperclip = None
 
-from .detector import detect_sensitive, strip_sensitive_copy_prefix
+from .detector import detect_sensitive, strip_sensitive_copy_prefix, summarize_detections
+from .notifier import notify
 
 
 class Monitor(threading.Thread):
-    def __init__(self, db, q: queue.Queue, interval=0.6):
+    def __init__(self, db, q: queue.Queue, interval=0.6, notifications=True, notify_cooldown=2.0):
         super().__init__(daemon=True)
         self.db, self.q, self.interval = db, q, interval
         self._stop   = threading.Event()
@@ -27,6 +28,12 @@ class Monitor(threading.Thread):
         self._last_lock = threading.Lock()
         self._last_ts = 0.0
         self._cooldown = 0
+
+        # Notification settings
+        self.notifications_enabled = notifications
+        self._notify_cooldown = notify_cooldown
+        self._last_notify_ts = 0.0
+        self._notify_lock = threading.Lock()
 
     def run(self):
         while not self._stop.is_set():
@@ -67,9 +74,33 @@ class Monitor(threading.Thread):
             with self._last_lock:
                 self._last = text
                 self._last_ts = now
+
+            # Fire a desktop notification for sensitive detections (throttled)
+            if detections:
+                self._maybe_notify(detections)
+
             # Put detections alongside the record so UI can react
             self.q.put((rid, text, detections))
             time.sleep(self.interval)
+
+    def _maybe_notify(self, detections) -> None:
+        if not self.notifications_enabled:
+            return
+        now = time.time()
+        with self._notify_lock:
+            if (now - self._last_notify_ts) < self._notify_cooldown:
+                return
+            self._last_notify_ts = now
+        summary = summarize_detections(detections)
+        body = f"Detected: {summary}" if summary else "Sensitive data detected in clipboard"
+        try:
+            notify("⚠️ Sensitive data copied", body)
+        except Exception:
+            # Notifications must never crash the monitor thread
+            pass
+
+    def set_notifications_enabled(self, enabled: bool) -> None:
+        self.notifications_enabled = bool(enabled)
 
     def _capture_source(self, text: str) -> str | None:
         """Best-effort source capture.
