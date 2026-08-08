@@ -1,0 +1,3 @@
+[console_scripts]
+clipboard-dlp = clipboard_dlp.cli:main
+clipboard-dlp-gui = clipboard_dlp.app:main

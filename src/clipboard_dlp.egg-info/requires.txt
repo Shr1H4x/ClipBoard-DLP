@@ -1,0 +1,12 @@
+click>=8.0
+pyperclip
+pystray
+psutil
+pydantic
+PyYAML
+pytest
+pillow
+plyer
+
+[:sys_platform == "win32"]
+pywin32
