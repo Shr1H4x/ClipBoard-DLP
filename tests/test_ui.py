@@ -5,13 +5,29 @@ import types
 import pytest
 import tkinter as tk
 
+from clipboard_dlp import app as app_mod
+from clipboard_dlp import db as db_mod
 from clipboard_dlp.app import App
 from clipboard_dlp.detector import SENSITIVE_COPY_PREFIX
 from clipboard_dlp.monitor import Monitor
 
 
 @pytest.fixture(scope="module")
-def app_instance():
+def app_instance(tmp_path_factory):
+    # Isolate tests from the real user DB — never touch the live history.
+    # ClipDB's default path is bound at import time, so the only reliable way
+    # to redirect it is to swap the ClipDB class App constructs.
+    db_file = str(tmp_path_factory.mktemp("db") / "test_history.db")
+    monkeypatch = pytest.MonkeyPatch()
+
+    real_clipdb = db_mod.ClipDB
+
+    class IsolatedClipDB(real_clipdb):
+        def __init__(self, path=None, **kw):
+            super().__init__(db_file, **kw)
+
+    monkeypatch.setattr(app_mod, "ClipDB", IsolatedClipDB)
+
     root = tk.Tk()
     root.withdraw()
     app = App(root)
@@ -26,6 +42,7 @@ def app_instance():
         root.destroy()
     except Exception:
         pass
+    monkeypatch.undo()
 
 
 def test_preview_display(app_instance):
@@ -44,24 +61,17 @@ def test_preview_display(app_instance):
     assert not hasattr(app, "_source_text")
 
 
-def test_copy_uses_pyperclip(monkeypatch, app_instance):
+def test_copy_uses_clipboard_module(monkeypatch, app_instance):
     app = app_instance
     app.db.clear()
-    rid = app.db.add("copy-me", source="test")
+    app.db.add("copy-me", source="test")
     app._reload()
     row = app._rows[0]
     app._select(row)
 
-    # Create a dummy pyperclip module
-    mod = types.SimpleNamespace()
+    from clipboard_dlp import clipboard as clip_mod
     state = {"val": None}
-    def _copy(v):
-        state["val"] = v
-    def _paste():
-        return state["val"]
-    mod.copy = _copy
-    mod.paste = _paste
-    monkeypatch.setitem(sys.modules, "pyperclip", mod)
+    monkeypatch.setattr(clip_mod, "copy", lambda v: state.update(val=v) or True)
 
     app._copy(row)
     assert state["val"] == "copy-me"
@@ -75,18 +85,9 @@ def test_sensitive_copy_prepends_warning(monkeypatch, app_instance):
     row = app._rows[0]
     app._select(row)
 
-    mod = types.SimpleNamespace()
+    from clipboard_dlp import clipboard as clip_mod
     state = {"val": None}
-
-    def _copy(v):
-        state["val"] = v
-
-    def _paste():
-        return state["val"]
-
-    mod.copy = _copy
-    mod.paste = _paste
-    monkeypatch.setitem(sys.modules, "pyperclip", mod)
+    monkeypatch.setattr(clip_mod, "copy", lambda v: state.update(val=v) or True)
 
     app._copy(row)
     assert state["val"].startswith(f"{SENSITIVE_COPY_PREFIX}\n\n")
@@ -111,6 +112,16 @@ def test_preview_scrollable(app_instance):
         pass
     v = app._preview.yview()
     assert v[0] >= 0.0
+
+
+def test_scroll_target_resolves_from_event_widget(app_instance):
+    app = app_instance
+    child = tk.Frame(app._lf)
+    assert app._resolve_scroll_target(types.SimpleNamespace(widget=child))[0] is app._canvas
+    assert app._resolve_scroll_target(types.SimpleNamespace(widget=app._lf))[0] is app._canvas
+    assert app._resolve_scroll_target(types.SimpleNamespace(widget=app._canvas))[0] is app._canvas
+    assert app._resolve_scroll_target(types.SimpleNamespace(widget=app._preview))[0] is app._preview
+    assert app._resolve_scroll_target(types.SimpleNamespace(widget=app._pause_btn)) == (None, None)
 
 
 def test_monitor_capture_fallback(monkeypatch):

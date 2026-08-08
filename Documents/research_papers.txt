@@ -1,0 +1,13 @@
+windows
+https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard
+https://learn.microsoft.com/en-us/windows/win32/dataxchg/using-the-clipboard
+https://dragonfly2.readthedocs.io/en/stable/clipboard.html
+
+linux 
+https://github.com/astrand/xclip
+https://wayland.freedesktop.org/docs/book/Protocol.html
+https://doc.qt.io/qt-6/qclipboard.html
+https://github.com/bugaevc/wl-clipboard
+https://invent.kde.org/plasma/plasma-workspace/-/tree/master/klipper
+https://gitlab.freedesktop.org/wayland/wayland
+

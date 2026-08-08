@@ -6,4 +6,7 @@ pydantic
 PyYAML
 pytest
 pillow
+platformdirs
+plyer
+pywin32; sys_platform == "win32"
 
