@@ -1,6 +1,6 @@
-# Clipboard DLP Tool — Efficient Storage Strategy
+# Clipboard DLP Tool — Storage Strategy
 
-> No database. No RAM persistence. Inspect, classify, discard.
+> Inspect, classify, store carefully — with privacy-preserving defaults.
 
 ---
 
@@ -26,88 +26,99 @@ The data **lives inside the source application's own memory** — not in any cli
 
 ---
 
-## The Problem for a DLP Monitor
+## What This Means for the DLP Monitor
 
-A DLP tool is a **monitor**, not an application holding data. To inspect clipboard content you inevitably need to read it once — that read lands in your process memory momentarily. You **cannot avoid that single read**.
+A DLP tool is a **monitor**: to inspect clipboard content it must read it once — that read lands in its process memory momentarily. You **cannot avoid that single read**, and unlike a passive Wayland observer, this tool is also a **history recorder**, so a design decision was required:
 
-What you *can* control is **what happens after that read**.
+**Option A — "Inspect, classify, discard"** (pure metadata, no content stored):
+- Pros: minimal data footprint, strongest privacy posture
+- Cons: no clipboard history feature, no audit trail of *what* was copied, weaker thesis demo
+
+**Option B — "Inspect, classify, store securely"** (the implemented choice):
+- Store full content in a **local SQLite history** so the dashboard can show what was copied
+- Mitigate the privacy cost with strict defaults: owner-only permissions, automatic backups, and content never leaving the machine (no network, notifications carry labels only)
+
+The project implements **Option B** — a local, private, recoverable history — because the dashboard, demo scenarios, and thesis appendix all benefit from an audit trail, while the storage hardening below keeps the sensitive-data risk bounded.
 
 ---
 
-## The Pipeline — Inspect, Classify, Discard
+## The Implemented Pipeline
 
 ```
 Clipboard Event Fires
         ↓
-Read content into LOCAL variable (temporary, in stack memory)
+safe_paste() — wl-paste / xclip / pyperclip with hard 2s timeout
         ↓
-Run regex + entropy check on it (microseconds)
+strip_sensitive_copy_prefix(text) — ignore the app's own copy prefix
         ↓
-Extract ONLY metadata (type, risk level)
+Dedupe — skip if identical to last seen or to the DB's latest entry
         ↓
-del content  ←── explicitly destroy the actual data
+capture source app (xdotool / win32gui+psutil, throttled cache)
         ↓
-Log ONLY metadata → .log file (append-only, one line)
+db.add(text, source)  ──►  SQLite history table (single writer, locked)
         ↓
-Done. Nothing stored anywhere.
+detect_sensitive(text)  — regex + heuristic (+ optional YARA)
+        ↓
+notify()  — desktop notification with TYPE LABELS ONLY, never raw text
+        ↓
+q.put((rid, text, detections))  — UI queue, consumed by the dashboard
+        ↓
+Done. Read once, analyzed once, stored once, nothing sent anywhere.
 ```
 
 ---
 
-## Why Stack Memory Specifically
+## What Is Stored vs What Never Leaves
 
-When you assign a variable inside a function, Python puts it on the **call stack** — not heap, not persistent memory. The moment the function returns or you call `del`, it's gone. No garbage collector delay, no lingering reference.
+| Data | Stored locally? | Sent over network? | In notifications? |
+|---|---|---|---|
+| Actual clipboard text | ✅ Yes (SQLite, owner-only perms) | ❌ Never | ❌ Never |
+| Data type detected | ✅ Yes (re-derived on load) | ❌ | ✅ (label only) |
+| Timestamp | ✅ Yes | ❌ | ❌ |
+| Source application | ✅ Yes (`source` column) | ❌ | ❌ |
+| Raw sensitive values | ✅ Yes (inside the private DB) | ❌ Never | ❌ Never |
 
-```python
-def on_clipboard_change():
-    content = clipboard.read()      # stack variable, lives here only
-    result = analyze(content)       # analyze in place
-    del content                     # explicitly killed immediately
-    log_metadata(result)            # only metadata survives
-    # function returns → stack frame destroyed → zero trace
+The notification body therefore reads like:
+
+```
+⚠️ Sensitive data copied
+Detected: AWS access key, API key/secret
 ```
 
-**Never pass `content` anywhere outside `on_clipboard_change()`.**
-No global variables, no class attributes, no queues carrying the raw text.
-Only `result` (the metadata object) leaves the function — never `content`.
+— useful, and zero raw content exposed to the lock screen or notification center.
 
 ---
 
-## What Each Part Uses
+## Storage Hardening (why it's safe to store)
 
-| Step | Method | Storage Cost |
-|---|---|---|
-| Read clipboard | Stack variable | ~bytes, microseconds |
-| Regex match | `re` runs on the variable | Zero extra allocation |
-| Entropy check | One float calculation | Zero extra allocation |
-| `del content` | Stack frame cleared | Back to zero |
-| Log metadata | One appended line in `.log` | ~80 bytes per event |
-| Dashboard feed | `deque(maxlen=100)` metadata only | ~8KB max, no content |
+| Measure | Implementation (`db.py`, `constants.py`) |
+|---|---|
+| Location | User data dir, not the package dir: `~/.local/share/clipboard_dlp/` (Linux), `%LOCALAPPDATA%\clipboard_dlp\` (Windows), `~/Library/Application Support/clipboard_dlp/` (macOS) |
+| Permissions | DB file `chmod 0600` on POSIX (owner read/write only) |
+| Backups | Automatic daily snapshot to `backups/` next to the DB; the 10 most recent are kept |
+| Wipe safety | `clear()`/`delete` snapshot the DB *first* — accidental wipes are recoverable |
+| Migration | First launch migrates a packaged legacy DB into the user data dir |
+| Isolation | `CLIPBOARD_DLP_DB=/path/to.db` env var pins a custom DB (tests, debugging) |
+| Threading | Single connection guarded by a lock — one writer, no corruption |
 
 ---
 
-## What You Log vs What You Discard
+## Why Not Store Less (Option A) — Honest Trade-off
 
-| Data | Store it? | Why |
-|---|---|---|
-| Actual clipboard text | ❌ Never | Privacy, security |
-| Data type detected | ✅ Yes | `BTC_ADDRESS`, `API_KEY` |
-| Risk level | ✅ Yes | `CRITICAL`, `HIGH` |
-| Timestamp | ✅ Yes | Audit trail |
-| Source application | ✅ Yes | `chrome.exe` |
-| Action taken | ✅ Yes | `CLEARED`, `ALERTED` |
+The metadata-only approach (no content anywhere) is strictly more private, and the original Wayland note stands: **"no storage is more efficient than no storage"** — for the *sniffing* threat. But a clipboard DLP tool without a history is a notification-only box: users cannot review what was copied, the dashboard preview cannot work, and the thesis loses its primary demonstration artifact.
 
-Your log entry becomes:
-```
-[14:32:11] CRITICAL | BTC_ADDRESS | CLEARED | chrome.exe
-```
-— completely useful for a thesis, zero sensitive data stored.
+The chosen middle ground:
+
+- **Content never leaves the machine** — no upload, no telemetry, no shared logs
+- **Content never enters notification paths** — the highest-exposure surface (lock screen / notification center) only ever sees labels
+- **Content on disk is private by default** — 0600 permissions in a user-only directory
+- **Content is recoverable by design** — daily snapshots protect against accidents
 
 ---
 
 ## Bottom Line
 
-There is **no storage mechanism more efficient than no storage**. Wayland proved that — the answer isn't a better database or RAM structure, it's designing the pipeline so the sensitive data is **read → analyzed → discarded** in a single pass, and only metadata survives. That's the professional DLP approach.
+The pipeline reads the clipboard **once**, analyzes it once, stores it **securely and locally** (SQLite, owner-only permissions, daily backups), and exposes **only metadata** to the outside world (notifications, CSV export fields). Storage is a deliberate, hardened feature — not a leak vector: anything that can be stored locally is also protected by permissions, backups, and an isolation escape hatch.
 
 ---
 

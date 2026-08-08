@@ -21,115 +21,92 @@ A cross-platform, real-time clipboard security agent designed to detect, alert, 
 | Component | Technology |
 |---|---|
 | Language | Python 3.10+ |
+| Package layout | `src/clipboard_dlp/` (src-layout, pip-installable) |
+| CLI framework | `click` |
 
-### Clipboard Access
+### Clipboard Access (`clipboard.py`)
 | Component | Technology |
 |---|---|
-| Cross-platform R/W | `pyperclip` |
-| Windows hook-based | `pywin32` (`WM_CLIPBOARDUPDATE`) |
+| Wayland | `wl-paste` / `wl-copy` via `subprocess` |
+| X11 | `xclip` / `xsel` via `subprocess` |
+| Fallback (Win / macOS) | `pyperclip` |
+| Safety | Hard 2s timeouts on every subprocess call — never blocks the monitor thread |
 
-> Switching from polling to Windows clipboard hooks via `pywin32` is the most impactful upgrade — catches clipboard changes in real time without CPU overhead.
+> Linux clipboard tools can block indefinitely (wl-paste waits on the clipboard owner, wl-copy daemonizes and keeps pipes open). Wrapping them in `subprocess.run(timeout=2)` is essential so a stuck clipboard never stalls detection.
 
----
+### Monitor Thread (`monitor.py`)
+| Component | Technology |
+|---|---|
+| Polling loop | `threading.Thread` + `time.sleep` (0.6s default) |
+| Deduplication | in-memory last-value cache + DB last-entry check |
+| Source capture | `xdotool` (X11) · `pywin32` + `psutil` (Windows) · regex heuristics (browser/html/email) |
+| Notification throttle | 2s cooldown lock |
+| UI bridge | `queue.Queue` → Tkinter `after()` polling |
 
 ### Detection & Analysis Engine
 | Component | Technology |
 |---|---|
-| Regex matching | `re` (stdlib) |
-| Entropy detection | Shannon entropy (custom function, no extra lib) |
-| Future ML classifier | `scikit-learn` |
+| Regex patterns (`detector.py`) | `re` (stdlib), 12+ precompiled patterns |
+| Password-like heuristic | custom 4-character-class heuristic (upper + lower + digit + symbol, or credential keyword + digit) |
+| YARA rules | `yara-python` (optional), rules in `src/clipboard_dlp/yara/` |
+| CLI entropy check (`analyzer.py`) | Shannon entropy (custom function, no extra lib) |
+| CLI risk tiers | LOW → MEDIUM → HIGH → CRITICAL |
 
----
+> Detection is layered: cheap regex first, heuristic for bare unlabeled credentials, then optional YARA signatures for private key blocks, Slack/GitHub tokens, Bearer tokens, DB connection strings, and .env credential lines.
 
 ### UI / UX & User Interface
-
-Two options depending on project goals:
-
-#### Option A — Desktop GUI (Recommended for thesis)
 | Component | Technology |
 |---|---|
-| GUI framework | `PyQt6` |
-| Live charts / dashboard | `pyqtgraph` |
-| Styling | QDarkStyleSheet / custom QSS |
-| Layout design tool | Qt Designer (exports `.ui` files) |
+| GUI framework | `Tkinter` (stdlib, no external GUI deps) |
+| Custom widgets | `widgets.py` (flat buttons, entries, history rows) |
+| Dialogs | `dialogs.py` (notify / confirm / export, draggable) |
+| Styling | custom dark palette in `constants.py` (GitHub-dark inspired) |
+| Layout | `PanedWindow` for resizable list + preview panes |
 
-#### Option B — Web-based Dashboard (More modern)
+> Tkinter keeps the app dependency-light and cross-platform. The dashboard shows a live history list with search/filter, a full-content preview pane with a sensitive-data summary, pause/resume, copy, delete, clear-all, and CSV export.
+
+### Notifications & Alerts (`notifier.py`)
 | Component | Technology |
 |---|---|
-| Backend | `FastAPI` or `Flask` |
-| Frontend | `React` + `Tailwind CSS` + `shadcn/ui` |
-| Charts | `Chart.js` or `Recharts` |
-| Real-time events | `WebSockets` (`websockets` lib or `Flask-SocketIO`) |
+| Linux | `notify-send --print-id` (+ D-Bus `CloseNotification`) · fallback `zenity` |
+| Windows | `win10toast` |
+| macOS | `osascript` (display notification) |
+| Last resort | `plyer` |
 
-> Option A (PyQt6) is recommended for a thesis — cleaner to demo and distributable as a standalone `.exe`.
-
----
-
-### Notifications & Alerts
-| Component | Technology |
-|---|---|
-| OS-native toasts | `plyer` |
-| Rich Windows 10/11 toasts | `winotify` |
-| Alert sound (Critical) | `pygame.mixer` / `winsound` (Windows only) |
-
----
+> Notifications are capped at 5 seconds (enforced via D-Bus on Linux, since GNOME/KDE often ignore the `-t` timeout) and **never include the raw sensitive value** — only type labels — because notifications can appear on lock screens.
 
 ### System Tray
 | Component | Technology |
 |---|---|
-| Tray agent | `pystray` |
-| Dynamic tray icon (threat color) | `Pillow (PIL)` |
+| Tray agent | `pystray` (lazy-created on window close) |
+| Tray icon | `Pillow (PIL)` — programmatically drawn |
 
----
+> Windows hides to tray and keeps monitoring. Linux/macOS asks first and falls back to taskbar minimize because tray hosting is unreliable under Wayland/GNOME.
 
-### Process Detection
+### Storage (`db.py`)
 | Component | Technology |
 |---|---|
-| Process enumeration | `psutil` |
-| Foreground window (Windows) | `pywin32` (`win32gui`, `win32process`) |
+| History DB | `sqlite3` (stdlib) — `history(id, timestamp, content, source)` |
+| Auto-backup | daily snapshot to `backups/` (10 most recent kept) |
+| Permissions | DB file chmod `0600` on POSIX |
+| Isolation | `CLIPBOARD_DLP_DB` env var overrides DB path |
+| Concurrency | per-connection `threading.Lock` |
 
----
+> SQLite is the single source of truth: full content is stored (required by the history UI), with owner-only permissions, automatic daily backups, and snapshot-before-clear safety so accidental wipes are recoverable.
 
-### Logging & Storage
+### Configuration & Packaging
 | Component | Technology |
 |---|---|
-| Runtime logs | `logging` (stdlib) |
-| Structured event storage | `sqlite3` (stdlib) |
-| Report export (CSV/JSON) | `pandas` |
-
-> Using SQLite instead of flat log files is a major upgrade — enables querying, filtering, and clean report export for the thesis appendix.
-
----
-
-### Configuration
-| Component | Technology |
-|---|---|
-| Config file format | `PyYAML` (`config.yaml`) |
-| Config validation | `pydantic` v2 |
-
----
-
-### Clipboard Snapshot Diffing
-| Component | Technology |
-|---|---|
-| Hash comparison | `hashlib` (stdlib) — SHA-256 |
-
----
-
-### Packaging & Distribution
-| Component | Technology |
-|---|---|
-| Binary bundler | `PyInstaller` (single `.exe` or Linux binary) |
-| Windows installer | `Inno Setup` or `NSIS` |
-
----
+| Dependencies | `requirements.txt` (click, pyperclip, pystray, psutil, pydantic, PyYAML, pytest, pillow, platformdirs, plyer, pywin32 on Windows) |
+| Console scripts | `clipboard-dlp` (CLI) · `clipboard-dlp-gui` (GUI) |
+| Windows build | `scripts/build_windows.bat` → PyInstaller (`packaging\ClipboardDLP.spec`) |
 
 ### Testing
 | Component | Technology |
 |---|---|
 | Test framework | `pytest` |
-| Mocking clipboard state | `pytest-mock` |
-| Test coverage reports | `coverage.py` |
+| Test modules | `test_analyzer`, `test_cli`, `test_db`, `test_detector`, `test_monitor`, `test_notifier`, `test_ui` |
+| Runner | `tests/run_tests.sh` |
 
 ---
 
@@ -137,20 +114,18 @@ Two options depending on project goals:
 
 | Layer | Technology |
 |---|---|
-| Core Runtime | Python 3.10+ |
-| Clipboard Monitoring | `pyperclip` + `pywin32` (Windows hook) |
-| Detection Engine | `re` + Shannon entropy function |
-| Desktop GUI | `PyQt6` + `pyqtgraph` |
-| OR Web Dashboard | `FastAPI` + `React` + `Tailwind` + `Socket.IO` |
-| Notifications | `plyer` + `winotify` (Win) |
-| Alert Sound | `pygame.mixer` / `winsound` |
+| Core Runtime | Python 3.10+ (src-layout package) |
+| Clipboard Monitoring | `wl-paste`/`wl-copy`, `xclip`/`xsel`, `pyperclip` fallback |
+| Monitor Thread | stdlib `threading` + `queue` |
+| Detection Engine | `re` + custom heuristic + optional `yara-python` |
+| CLI | `click` (`analyze`, `backup`, `info`, `show-docs`) |
+| Desktop GUI | `Tkinter` (stdlib) + custom widgets |
+| Notifications | `notify-send`/`zenity`, `win10toast`, `osascript`, `plyer` |
 | System Tray | `pystray` + `Pillow` |
-| Process Detection | `psutil` + `pywin32` |
-| Logging | `logging` + `sqlite3` |
-| Report Export | `pandas` |
-| Config Validation | `PyYAML` + `pydantic` |
-| Packaging | `PyInstaller` + Inno Setup |
-| Testing | `pytest` + `pytest-mock` + `coverage.py` |
+| Process Detection | `xdotool`, `pywin32` + `psutil` |
+| Storage | `sqlite3` + daily backups (10 kept, chmod 0600) |
+| Packaging | `pip install -e .` + PyInstaller (`build_windows.bat`) |
+| Testing | `pytest` (7 modules) |
 
 ---
 
@@ -161,59 +136,47 @@ Two options depending on project goals:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        OS CLIPBOARD LAYER                       │
-│   Windows: pywin32 WM_CLIPBOARDUPDATE hook                      │
-│   Linux: xclip / xsel · macOS: pbpaste                         │
+│   Wayland: wl-paste / wl-copy  X11: xclip / xsel               │
+│   Fallback: pyperclip (Windows / macOS)                        │
+│   subprocess timeouts (2s) — never blocks                      │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                         CORE ENGINE                             │
-│                                                                 │
-│  monitor.py ──► analyzer.py ──► classifier.py                  │
-│  (hook loop)    (regex +         (Low / Med /                   │
-│                  entropy)         High / Crit)                  │
-│                      │                                          │
-│               regex_patterns.py                                 │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       RESPONSE LAYER                            │
-│              responder.py — dispatches by risk level            │
-│                                                                 │
-│   [Alert]     [Auto-clear]     [Sound]      [Log Event]        │
-│   plyer +     pyperclip        pygame       logging +           │
-│   winotify    .copy("")        .mixer       sqlite3             │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
+│                          MONITOR THREAD                         │
+│   monitor.py — poll loop (0.6s)                                 │
+│   dedupe → source capture (xdotool / win32)                     │
+│   db.add() → detect_sensitive() → notify() → q.put()           │
+└──────────────┬──────────────────────────────┬───────────────────┘
+               │                              │
+               ▼                              ▼
+┌─────────────────────────────────┐  ┌─────────────────────────────┐
+│        DETECTION ENGINE         │  │       PERSISTENCE           │
+│   detector.py                   │  │   db.py — SQLite            │
+│   regex patterns (12+)          │  │   history(id, timestamp,    │
+│   password-like heuristic       │  │   content, source)          │
+│   YARA rules (optional)         │  │   daily backups (10)        │
+│   analyzer.py (CLI): entropy +  │  │   chmod 0600 · env override │
+│   risk tier                     │  └─────────────────────────────┘
+└─────────────────┬───────────────┘
+                  │
+                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      PRESENTATION LAYER                         │
 │                                                                 │
-│  [System Tray]   [Dashboard GUI]   [Alert Popups]  [Proc Det]  │
-│  pystray +       PyQt6 +           PyQt6           psutil +    │
-│  Pillow          pyqtgraph         QMessageBox     win32gui    │
+│  [Dashboard]      [Dialogs]      [Notifications]  [Tray]        │
+│  app.py (Tk)      dialogs.py     notifier.py      pystray +     │
+│  widgets.py       (confirm/      notify-send,     Pillow        │
+│  search, preview,  export)       win10toast,      (lazy, Win)   │
+│  pause, export                   osascript, plyer               │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     DATA & CONFIG LAYER                         │
-│                                                                 │
-│  [SQLite DB]  [Log File]  [config.yaml]    [Report Export]     │
-│  sqlite3      logging     PyYAML +         pandas              │
-│  (stdlib)     stdlib      pydantic         CSV / JSON          │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        TESTING LAYER                            │
-│   pytest + pytest-mock       coverage.py       main.py --test  │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      BUILD / PACKAGE                            │
-│   PyInstaller (.exe / binary)   Inno Setup   requirements.txt  │
+│                        CLI & BUILD LAYER                        │
+│   cli.py (click): info · analyze --text · backup · show-docs   │
+│   console scripts: clipboard-dlp, clipboard-dlp-gui             │
+│   build_windows.bat → PyInstaller .exe                          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -221,78 +184,117 @@ Two options depending on project goals:
 
 ### Architecture Notes
 
-**OS Layer** hooks into the system at the lowest available level. On Windows, `pywin32`'s `WM_CLIPBOARDUPDATE` message replaces polling — far more efficient. On Linux it falls back to `xclip`/`xsel`.
+**OS Clipboard Layer** never blocks: every external tool call (`wl-paste`, `xclip`, …) runs under a hard subprocess timeout. `pyperclip` is only a fallback where no native tool exists (Windows/macOS).
 
-**Core Engine** is a pure data pipeline with no side effects. `monitor.py` captures the clipboard event → `analyzer.py` runs text through `regex_patterns.py` + Shannon entropy check → `classifier.py` assigns the risk tier.
+**Monitor Thread** is the single writer. Each poll reads the clipboard, strips the app's own "Sensitive data copied" prefix, dedupes against the last seen value and the DB's latest entry, captures the source application (throttled cache), stores the entry, runs detection, fires a throttled notification, and pushes `(rid, text, detections)` onto a queue consumed by the GUI via `root.after()`.
 
-**Response Layer** fans out to four actions in parallel based on risk level. The log event always fires regardless of risk level.
+**Detection Engine** is layered for accuracy: precompiled regex for common formats → a conservative password-like heuristic that skips non-credential mixed-case tokens (`iPhone15ProMax`, `Christmas2024`) → optional YARA rules. The CLI analyzer (`analyzer.py`) offers a simpler pattern set plus Shannon entropy and a four-tier risk label.
 
-**Presentation Layer** consumes events from the responder — the dashboard and tray are display consumers, not part of the core pipeline. Process detection feeds into the dashboard to show which app triggered each event.
+**Persistence** stores full content in SQLite (the history UI requires it) with strong defaults: owner-only file permissions, automatic daily snapshots in `backups/`, and a backup-before-clear guarantee. The `CLIPBOARD_DLP_DB` env var isolates test/debug instances.
 
-**Data & Config Layer** holds all persistent state. SQLite is the primary store, the flat log file is the human-readable audit trail, `config.yaml` + pydantic validate rules at startup, and `pandas` handles report export.
+**Presentation Layer** consumes events from the monitor — the dashboard, dialogs, and tray are display consumers, not part of the core pipeline. Sensitive detections are highlighted with a red strip and summarized in the preview pane; notifications only ever carry type labels, never raw content.
 
-**Config feed** — the dashed connection from `config.yaml` back up to the core engine means detection thresholds and patterns are runtime-configurable. Change the YAML, restart, get different behavior — no code edits needed.
+**CLI & Build Layer** exposes the same detection/storage machinery headlessly (`analyze`, `backup`, `info`, `show-docs`) and packages the GUI as a Windows executable via PyInstaller.
 
 ---
 
 ## Detection Engine — Pattern Coverage
 
-| Data Type | Pattern | Default Risk |
+### Regex patterns (`detector.py`)
+
+| Data Type | Pattern Example | Label |
 |---|---|---|
-| BTC Wallet Address | `1A1zP1eP5QGefi2...` | Critical |
-| ETH Wallet Address | `0x742d35Cc6634...` | Critical |
-| Password-like Strings | High entropy + special chars | High |
-| Credit Card Numbers | `4111 1111 1111 1111` | High |
-| API Keys / Tokens | `sk-`, `ghp_`, `AKIA...` | High |
-| OTP / 2FA Codes | 4–8 digit standalone | Medium |
-| Email Addresses | `user@domain.com` | Medium |
-| Phone Numbers | Local + international | Medium |
-| Private IPs / Internal URLs | `192.168.x.x`, `10.x.x.x` | Low |
-| Generic Sensitive Keywords | `password`, `secret`, `token` | Low |
+| Email address | `user@domain.com` | Email address |
+| AWS access key | `AKIA...` (16 chars) | AWS access key |
+| JWT | `eyJ...` (3 base64url segments, `eyJ`-anchored) | JWT |
+| IPv4 | `192.168.1.1` | IP address |
+| SSN | `123-45-6789` | SSN |
+| Credit card | Visa / Mastercard / Amex lengths | Credit card |
+| Phone number | `+91 98765 43210` | Phone number |
+| Password | `password: hunter2` · `the password is xyz` | Password |
+| API key/secret | `api_key: sk-...` | API key/secret |
+| .env secret | `DB_PASSWORD=...` · `SECRET_KEY=...` | Environment secret |
+| OTP | `your verification code is 482913` | OTP |
+| PIN | `PIN: 1234` · `pin is 987654` | PIN code |
+
+### Heuristic
+
+| Data Type | Description |
+|---|---|
+| Password-like string | Bare unlabeled tokens with all 4 character classes (`_@B4g@mZ$RfyE3N`) or credential keywords + digits/symbols (`mypassword123`) |
+
+### YARA rules (`yara/`)
+
+| Rule Set | Detects |
+|---|---|
+| `credentials.yar` | Private key blocks (PEM/OpenSSH/PGP), Slack tokens/webhooks, Bearer tokens, DB connection strings, basic-auth URLs, GitHub tokens, API keys |
+| `passwords.yar` | Password/secret/env assignment lines, SSH credential pairs |
+| `secrets.yar` | API keys (AWS/Google/GitHub) |
+
+### CLI analyzer (`analyzer.py`)
+
+| Data Type | Risk |
+|---|---|
+| BTC address / ETH address | Critical |
+| API-key-like token or entropy > 4.5 | High |
+| Credit card / OTP / PIN | High |
+| Other match | Medium |
+| No match | Low |
 
 ---
 
-## Response Matrix
+## Notification Matrix
 
-| Risk Level | Alert | Auto-Clear | Log |
+| Detection | Desktop Notification | Raw Value in Notification | Stored |
 |---|---|---|---|
-| Low | Silent log only | No | Yes |
-| Medium | Toast notification | No | Yes |
-| High | Alert popup | Yes (5s delay) | Yes |
-| Critical | Alert + sound | Yes (immediate) | Yes |
+| Sensitive | Yes (2s cooldown, 5s duration cap) | Never — labels only | Yes |
+| Normal copy | No | — | Yes |
 
 ---
 
 ## Project File Structure
 
 ```
-clipboard-security-tool/
+CLIPBOARD-DLP/
 │
-├── main.py                  # Entry point
-├── requirements.txt
-├── config.yaml              # Detection rules and thresholds
+├── requirements.txt          # Python dependencies
+├── README.md                 # Project documentation
+├── how-to-run.md             # Run instructions
+├── technology&architecture.md
+├── clipboard_dlp_storage_strategy.md
 │
-├── core/
-│   ├── monitor.py           # Clipboard polling / hook loop
-│   ├── analyzer.py          # Pattern matching and classification
-│   ├── classifier.py        # Risk level assignment logic
-│   └── responder.py         # Alert, clear, and log actions
+├── scripts/
+│   └── build_windows.bat     # PyInstaller build for Windows
 │
-├── patterns/
-│   └── regex_patterns.py    # All detection patterns (extensible)
+├── src/clipboard_dlp/
+│   ├── __init__.py           # Version
+│   ├── app.py                # Tkinter dashboard entry point
+│   ├── cli.py                # click CLI entry point
+│   ├── monitor.py            # Background poll thread, dedupe, source capture
+│   ├── clipboard.py          # wl-paste/xclip/pyperclip with hard timeouts
+│   ├── detector.py           # Regex + heuristic + YARA detection
+│   ├── analyzer.py           # CLI patterns + entropy + risk tiers
+│   ├── db.py                 # SQLite history + daily backups
+│   ├── notifier.py           # Cross-platform notifications
+│   ├── constants.py          # Paths, colors, fonts
+│   ├── widgets.py            # Custom Tk widgets (buttons, rows, entries)
+│   ├── dialogs.py            # Notify / confirm / export dialogs
+│   └── yara/
+│       ├── credentials.yar
+│       ├── passwords.yar
+│       └── secrets.yar
 │
-├── gui/
-│   ├── dashboard.py         # Real-time event dashboard (PyQt6)
-│   ├── tray.py              # System tray agent (pystray)
-│   └── alerts.py            # Alert popup windows (PyQt6)
+├── tests/
+│   ├── test_analyzer.py
+│   ├── test_cli.py
+│   ├── test_db.py
+│   ├── test_detector.py
+│   ├── test_monitor.py
+│   ├── test_notifier.py
+│   ├── test_ui.py
+│   └── run_tests.sh
 │
-├── logs/
-│   └── clipboard_events.log # Runtime log output
-│   └── clipboard_events.db  # SQLite event database
-│
-└── tests/
-    ├── test_analyzer.py
-    └── test_classifier.py
+└── logs/                     # Legacy runtime logs
 ```
 
 ---

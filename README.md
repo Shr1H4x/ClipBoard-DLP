@@ -2,8 +2,8 @@
 
 > A cross-platform, real-time clipboard security agent designed to detect, alert, and prevent sensitive data leakage at the endpoint level.
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=flat-square&logo=python)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-green?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-green?style=flat-square)
 ![License](https://img.shields.io/badge/License-Educational-orange?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-yellow?style=flat-square)
 
@@ -13,7 +13,7 @@
 
 Clipboard-based attacks are an underrepresented but critical class of endpoint threats. Malicious software silently monitors the system clipboard to intercept passwords, cryptocurrency wallet addresses, OTPs, and financial credentials — often without any user awareness.
 
-This project implements a lightweight **Data Loss Prevention (DLP)** agent focused entirely on clipboard security. It operates as a background process, continuously monitoring clipboard state, classifying copied content by risk level, and enforcing configurable response actions — alerts, auto-clear, and event logging.
+This project implements a lightweight **Data Loss Prevention (DLP)** agent focused entirely on clipboard security. It runs as a background monitor thread inside a desktop dashboard, continuously watching clipboard state, classifying copied content by risk level, firing OS-native notifications on sensitive detections, and keeping a queryable history database.
 
 **Core attack vectors this tool defends against:**
 - **ClipBanker / Clipboard Hijackers** — malware that swaps copied crypto addresses with attacker-controlled ones
@@ -24,10 +24,10 @@ This project implements a lightweight **Data Loss Prevention (DLP)** agent focus
 
 ## 🎯 Objectives
 
-- Monitor clipboard activity in real-time across Windows and Linux
-- Detect sensitive data using extensible pattern-based analysis
-- Classify detected data into risk levels (Low / Medium / High / Critical)
-- Prevent leakage through configurable alerts, auto-clear, and logging
+- Monitor clipboard activity in real-time across Windows, Linux, and macOS
+- Detect sensitive data using extensible regex + YARA pattern analysis
+- Notify the user instantly when sensitive data is copied
+- Keep a full clipboard history with source-application capture
 - Provide a functional, demonstrable proof-of-concept for endpoint DLP
 - Document real-world attack scenarios and threat model for academic analysis
 
@@ -39,23 +39,34 @@ This project implements a lightweight **Data Loss Prevention (DLP)** agent focus
 
 | Feature | Description |
 |---|---|
-| 📋 Real-time Clipboard Monitoring | Polls clipboard state at configurable intervals |
-| 🧠 Pattern-Based Detection | Regex engine covering 10+ sensitive data types |
-| ⚠️ Risk Classification | Four-tier risk model (Low → Critical) |
-| 🚨 Alert Notifications | Desktop notifications via OS-native APIs |
-| 🧹 Auto-Clear | Automatic clipboard wipe on High/Critical detections |
-| 📝 Event Logging | Timestamped logs with data type, risk level, and action taken |
-| 🖥️ System Tray Agent | Runs silently in background, always-on protection |
+| 📋 Real-time Clipboard Monitoring | Background poll thread (configurable interval, non-blocking) |
+| 🧠 Pattern-Based Detection | Regex engine for 12+ sensitive data types + YARA rules |
+| 🚨 Alert Notifications | OS-native notifications (notify-send, win10toast, osascript, plyer) |
+| 💾 SQLite History | Full copy history with timestamps, content, and source app |
+| 🔍 Source Application Capture | Foreground window / process identification (xdotool, win32gui) |
+| 🖥️ Desktop Dashboard | Dark-themed Tkinter GUI: search, preview, pause, export |
 
-### Advanced Features
+### GUI Features
 
 | Feature | Description |
 |---|---|
-| 🔍 Active Application Detection | Identifies which process triggered the clipboard event |
-| ⏱️ Smart Auto-Clear Timing | Configurable delay before clearing (grace period) |
-| 📊 Detection Dashboard | GUI for live event feed and statistics |
-| 🔒 Clipboard Snapshot Diffing | Detects silent clipboard manipulation by third-party processes |
-| 📁 Report Export | Export session logs as CSV or JSON for thesis reporting |
+| 🔎 Live Search / Filter | Filter history by content with entry counter |
+| 📄 Full-Content Preview | Right-hand pane with sensitive-data summary per entry |
+| ⏸ Pause / Resume | Suspend monitoring without quitting |
+| ⎘ Copy Entry | Recopy with a "⚠️ Sensitive data copied" warning prefix on flagged content |
+| ✕ Delete / ⌫ Clear All | Per-entry delete and full history wipe (with confirmation) |
+| ↯ Export CSV | Export history as CSV for thesis reporting |
+| 🗔 System Tray | Windows: hides to tray and keeps monitoring; Linux/macOS: ask + minimize fallback |
+| ⚠️ Sensitive Highlight | Detected entries marked with a red strip in the list |
+
+### CLI Features (`clipboard-dlp`)
+
+| Command | Description |
+|---|---|
+| `info` | Show project info message |
+| `analyze --text "<string>"` | Analyze text: matches, entropy, risk tier |
+| `backup` | Snapshot the history database to `backups/` |
+| `show-docs` | List available documentation files |
 
 ---
 
@@ -63,27 +74,38 @@ This project implements a lightweight **Data Loss Prevention (DLP)** agent focus
 
 ```
 ┌─────────────────────────────────────────────┐
-│              Clipboard Listener              │
-│         (Polling / Hook-based)               │
+│              Clipboard Layer                 │
+│   Wayland: wl-paste / wl-copy               │
+│   X11:     xclip / xsel                     │
+│   Fallback: pyperclip (Win / macOS)         │
+│   Hard 2s subprocess timeouts (no blocking) │
 └──────────────────┬──────────────────────────┘
                    │
                    ▼
 ┌─────────────────────────────────────────────┐
-│           Data Analyzer Engine              │
-│     (Regex Pattern Matching Engine)         │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
+│          Monitor Thread (monitor.py)        │
+│   Poll loop → dedupe → source capture →     │
+│   store → detect → notify → UI queue        │
+└──────────────┬──────────────┬───────────────┘
+               │              │
+               ▼              ▼
+┌────────────────────────┐  ┌─────────────────────────────┐
+│   Detection Engine     │  │   Persistence (db.py)       │
+│   detector.py          │  │   SQLite history table      │
+│   regex patterns +     │  │   (id, timestamp, content,  │
+│   password-like        │  │    source) · daily backups  │
+│   heuristic + YARA     │  │   · 0600 perms · backups/   │
+│   (optional rules)     │  └─────────────────────────────┘
+└──────────────┬────────┘
+               │
+               ▼
 ┌─────────────────────────────────────────────┐
-│         Risk Classification Module          │
-│      Low │ Medium │ High │ Critical         │
-└──────┬───────────┬──────────────┬───────────┘
-       │           │              │
-       ▼           ▼              ▼
-  ┌────────┐  ┌─────────┐  ┌──────────┐
-  │ Alert  │  │  Clear  │  │  Log     │
-  │ Notify │  │ Clipboard│  │  Event   │
-  └────────┘  └─────────┘  └──────────┘
+│          Presentation Layer                 │
+│   app.py (Tkinter dashboard) · dialogs.py   │
+│   widgets.py (list rows, buttons)           │
+│   notifier.py (OS notifications)            │
+│   pystray tray icon (lazy, Windows)         │
+└─────────────────────────────────────────────┘
 ```
 
 ---
@@ -92,44 +114,64 @@ This project implements a lightweight **Data Loss Prevention (DLP)** agent focus
 
 | Component | Technology | Purpose |
 |---|---|---|
-| Language | Python 3.8+ | Core runtime |
-| Clipboard Access | `pyperclip` | Cross-platform clipboard read/write |
-| GUI Framework | `PyQt5` / `Tkinter` | Dashboard and alert windows |
-| Pattern Matching | `re` (stdlib) | Sensitive data detection |
-| System Tray | `pystray` | Background agent icon |
-| Process Detection | `psutil` | Active application identification |
-| Notifications | `plyer` | OS-native desktop alerts |
-| Logging | `logging` (stdlib) | Event log management |
+| Language | Python 3.10+ | Core runtime |
+| GUI Framework | `Tkinter` (stdlib) | Dark-themed dashboard, dialogs, widgets |
+| CLI | `click` | `clipboard-dlp` command-line interface |
+| Clipboard Access | `wl-paste`/`wl-copy`, `xclip`/`xsel`, `pyperclip` | Cross-platform clipboard read/write |
+| Pattern Matching | `re` (stdlib) + Shannon entropy | Sensitive data detection |
+| YARA Rules | `yara` (optional) | Additional signature-based detection |
+| Storage | `sqlite3` (stdlib) | Clipboard history DB + automatic backups |
+| Notifications | `notify-send`/`zenity`, `win10toast`, `osascript`, `plyer` | OS-native desktop alerts |
+| Process Detection | `xdotool`, `pywin32` + `psutil` | Active application identification |
+| System Tray | `pystray` + `pillow` | Background tray icon (lazy-created) |
 
 ---
 
 ## 🔍 Detection Engine
 
-The analyzer uses a multi-pattern regex engine to identify sensitive data categories:
+The detector (`detector.py`) combines three layers:
 
-| Data Type | Pattern Example | Default Risk Level |
+1. **Regex patterns** — precompiled patterns for common sensitive formats
+2. **Password-like heuristic** — bare unlabeled credentials (`_@B4g@mZ$RfyE3N`, `mypassword123`)
+3. **YARA rules** (optional) — signature rules in `src/clipboard_dlp/yara/` (private key blocks, Slack/GitHub tokens, Bearer tokens, DB connection strings, .env lines, …)
+
+| Data Type | Pattern Example | Source |
 |---|---|---|
-| 💰 Crypto Wallet Address (BTC) | `1A1zP1eP5QGefi2...` | 🔴 Critical |
-| 💰 Crypto Wallet Address (ETH) | `0x742d35Cc6634...` | 🔴 Critical |
-| 🔑 Password-like Strings | High entropy + special chars | 🔴 High |
-| 💳 Credit Card Numbers | `4111 1111 1111 1111` | 🔴 High |
-| 🔐 API Keys / Tokens | `sk-`, `ghp_`, `AKIA...` | 🔴 High |
-| 🔢 OTP / 2FA Codes | 4–8 digit standalone | 🟡 Medium |
-| 📧 Email Addresses | `user@domain.com` | 🟡 Medium |
-| 📱 Phone Numbers | Local + international formats | 🟡 Medium |
-| 🌐 Private IPs / Internal URLs | `192.168.x.x`, `10.x.x.x` | 🟢 Low |
-| 📄 Generic Sensitive Keywords | `password`, `secret`, `token` | 🟢 Low |
+| 📧 Email Addresses | `user@domain.com` | regex |
+| 🔑 AWS Access Keys | `AKIA...` | regex + YARA |
+| 🪪 JWT Tokens | `eyJ...` (anchored on `eyJ`) | regex |
+| 🌐 IPv4 Addresses | `192.168.1.1` | regex |
+| 🪪 SSN | `123-45-6789` | regex |
+| 💳 Credit Card Numbers | Visa / Mastercard / Amex lengths | regex |
+| 📱 Phone Numbers | Local + international formats | regex |
+| 🔐 Passwords | `password: hunter2`, `pwd is xyz` | regex + YARA |
+| 🔑 API Keys / Secrets | `secret = ...`, `api_key: ...` | regex + YARA |
+| 🌱 .env Secrets | `DB_PASSWORD=...`, `SECRET_KEY=...` | regex + YARA |
+| 🔢 OTP / 2FA Codes | `your verification code is 482913` | regex |
+| 🔢 PIN Codes | `PIN: 1234` | regex |
+| 🧩 Password-like Strings | `_@B4g@mZ$RfyE3N` (4-char-class heuristic) | heuristic |
+| 🧬 YARA signatures | `-----BEGIN RSA PRIVATE KEY-----`, `xoxb-...` | YARA |
+| 💰 Crypto Wallet Addresses | BTC `1A1zP1eP...`, ETH `0x...40 hex` | CLI analyzer |
+
+The CLI analyzer (`analyzer.py`) additionally computes **Shannon entropy** and a four-tier risk assignment (LOW → CRITICAL) for ad-hoc analysis:
+
+```
+$ clipboard-dlp analyze --text "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+Matches: ['BTC_ADDRESS']
+Entropy: 4.59
+Risk: CRITICAL
+```
 
 ---
 
-## 🚨 Response Matrix
+## 🚨 Notification Behavior
 
-| Risk Level | Alert | Auto-Clear | Log |
+| Risk | Desktop Notification | Content in Notification | History Stored |
 |---|---|---|---|
-| 🟢 Low | Silent log only | ❌ | ✅ |
-| 🟡 Medium | Toast notification | ❌ | ✅ |
-| 🔴 High | Alert popup | ✅ (5s delay) | ✅ |
-| 🚨 Critical | Alert + sound | ✅ (immediate) | ✅ |
+| Any detection | ✅ Yes (throttled, 2s cooldown) | ❌ Never (labels only) | ✅ |
+| No detection | ❌ Silent | — | ✅ |
+
+Notifications are duration-capped at 5s (enforced via D-Bus `CloseNotification` on Linux) and never contain the raw sensitive value — only type labels — since OS notifications can appear on lock screens.
 
 ---
 
@@ -137,9 +179,9 @@ The analyzer uses a multi-pattern regex engine to identify sensitive data catego
 
 | OS | Status | Notes |
 |---|---|---|
-| Windows 10/11 | ✅ Supported | Full feature set |
-| Ubuntu / Debian Linux | ✅ Supported | Requires `xclip` or `xsel` |
-| macOS | ⚠️ Partial | Clipboard access supported, tray limited |
+| Windows 10/11 | ✅ Supported | pyperclip + win10toast + pywin32 source capture, tray icon |
+| Ubuntu / Debian Linux | ✅ Supported | `wl-paste` (Wayland) / `xclip` / `xsel`; `notify-send`; optional `xdotool` for source capture |
+| macOS | ✅ Supported | pyperclip + osascript notifications |
 
 ---
 
@@ -156,48 +198,50 @@ cd clipboard-security-tool
 
 ```bash
 pip install -r requirements.txt
+# or, for console scripts:
+pip install -e .
 ```
 
 ### 3. Linux Clipboard Backend (Required on Linux)
 
 ```bash
-sudo apt install xclip
-# or
-sudo apt install xsel
+# Wayland:
+sudo apt install wl-clipboard
+# X11:
+sudo apt install xclip xsel
+# optional — source application capture:
+sudo apt install xdotool
 ```
 
 ### 4. Verify Installation
 
 ```bash
-python main.py --test
+PYTHONPATH=src python3 -m clipboard_dlp.cli info
 ```
 
 ---
 
 ## ▶️ Usage
 
-### Run as Background Agent (Default)
+### Desktop Dashboard (GUI)
 
 ```bash
-python main.py
+PYTHONPATH=src python3 -m clipboard_dlp.app
 ```
 
-### Run with Dashboard GUI
+or after `pip install -e .`:
 
 ```bash
-python main.py --gui
+clipboard-dlp-gui
 ```
 
-### Run in Verbose Debug Mode
+### Command-Line Interface
 
 ```bash
-python main.py --verbose
-```
-
-### View Live Log
-
-```bash
-tail -f logs/clipboard_events.log
+clipboard-dlp info
+clipboard-dlp analyze --text "hello world"
+clipboard-dlp backup
+clipboard-dlp show-docs
 ```
 
 ---
@@ -205,32 +249,37 @@ tail -f logs/clipboard_events.log
 ## 🗂️ Project Structure
 
 ```
-clipboard-security-tool/
+CLIPBOARD-DLP/
 │
-├── main.py                  # Entry point
 ├── requirements.txt
-├── config.yaml              # User-configurable detection rules and thresholds
+├── scripts/
+│   └── build_windows.bat      # PyInstaller build for Windows
 │
-├── core/
-│   ├── monitor.py           # Clipboard polling loop
-│   ├── analyzer.py          # Pattern matching and data classification
-│   ├── classifier.py        # Risk level assignment logic
-│   └── responder.py         # Alert, clear, and log response actions
+├── src/clipboard_dlp/
+│   ├── __init__.py            # Package version
+│   ├── app.py                 # Tkinter dashboard (entry: clipboard-dlp-gui)
+│   ├── cli.py                 # click CLI (entry: clipboard-dlp)
+│   ├── monitor.py             # Background poll thread + source capture
+│   ├── clipboard.py           # wl-paste/xclip/pyperclip with hard timeouts
+│   ├── detector.py            # Regex + heuristic + YARA detection
+│   ├── analyzer.py            # CLI analyzer: patterns + entropy + risk tier
+│   ├── db.py                  # SQLite history + daily backups
+│   ├── notifier.py            # Cross-platform notifications
+│   ├── constants.py           # Paths, colors, fonts
+│   ├── widgets.py             # Buttons, entries, history rows
+│   ├── dialogs.py             # Notify / confirm / export dialogs
+│   └── yara/                  # Optional YARA rule sets
+│       ├── credentials.yar
+│       ├── passwords.yar
+│       └── secrets.yar
 │
-├── patterns/
-│   └── regex_patterns.py    # All detection patterns (extensible)
+├── tests/                     # pytest suite (7 modules)
+│   ├── test_analyzer.py       ├── test_db.py
+│   ├── test_cli.py            ├── test_monitor.py
+│   ├── test_detector.py       ├── test_notifier.py
+│   └── test_ui.py
 │
-├── gui/
-│   ├── dashboard.py         # Real-time event dashboard
-│   ├── tray.py              # System tray agent
-│   └── alerts.py            # Alert popup windows
-│
-├── logs/
-│   └── clipboard_events.log # Runtime log output
-│
-└── tests/
-    ├── test_analyzer.py
-    └── test_classifier.py
+└── *.md                       # README, how-to-run, architecture docs
 ```
 
 ---
@@ -243,39 +292,50 @@ clipboard-security-tool/
 1. User copies their BTC wallet address to send funds
 2. ClipBanker malware silently replaces it with attacker address
 3. ❌ Without tool: User pastes attacker address → funds lost
-4. ✅ With tool: Tool detects crypto address, alerts user, clears clipboard
+4. ✅ With tool: Tool detects the crypto address, notifies the user,
+   and re-copying from history prepends a "Sensitive data copied" warning
 ```
 
 ### Scenario 2: Accidental Password Copy
 
 ```
-1. Developer copies database password from config file
+1. Developer copies database password from a config file
 2. Switches window, pastes into Slack chat by mistake
 3. ❌ Without tool: Credential exposed in chat logs
-4. ✅ With tool: High-risk alert triggered on copy → user prompted before paste
+4. ✅ With tool: Monitor fires a desktop notification ("Detected: Password,
+   .env secret..."), the entry is flagged in history, and re-copying
+   prepends a warning header so the paste destination is visibly warned
 ```
 
 ### Scenario 3: API Key Leakage
 
 ```
-1. User copies AWS access key (AKIA...) from terminal
-2. Tool detects AKIA prefix pattern → Critical risk
-3. ✅ Auto-clear fires after 3 seconds with desktop notification
+1. User copies an AWS access key (AKIA...) from a terminal
+2. Tool detects the AKIA pattern (regex + YARA) → notification fired
+3. Entry stored with source application (e.g. "firefox - AWS Console")
+4. Notification shows only the label "AWS access key" — never the key itself
 ```
 
 ---
 
-## 📝 Logging Format
+## 🗄️ Data Storage
 
-All events are logged in structured format for analysis and thesis reporting:
+- **Database:** SQLite `clipboard_history.db` stored in the user data directory
+  (`~/.local/share/clipboard_dlp/` on Linux, `%LOCALAPPDATA%\clipboard_dlp\` on Windows, `~/Library/Application Support/clipboard_dlp/` on macOS)
+- **Schema:** `history(id, timestamp, content, source)` — source is the capturing application when available
+- **Protection:** file permissions restricted to owner (0600), automatic daily backup to `backups/` (10 snapshots kept)
+- **Isolation:** set `CLIPBOARD_DLP_DB=/path/to/db` to use a custom database location (useful for tests)
+- **Recovery:** `Clear All` and `delete` operations snapshot the DB first, so accidental wipes are recoverable
 
+---
+
+## 🧪 Testing
+
+```bash
+PYTHONPATH=src python3 -m pytest tests/
+# or
+./tests/run_tests.sh
 ```
-[2025-07-14 14:32:11] CRITICAL | Type: BTC_ADDRESS | Action: CLEARED | App: chrome.exe
-[2025-07-14 14:35:42] HIGH     | Type: PASSWORD    | Action: ALERTED | App: notepad.exe
-[2025-07-14 14:40:03] MEDIUM   | Type: EMAIL       | Action: LOGGED  | App: outlook.exe
-```
-
-Log fields: `timestamp`, `risk_level`, `data_type`, `action_taken`, `source_application`
 
 ---
 
@@ -283,9 +343,9 @@ Log fields: `timestamp`, `risk_level`, `data_type`, `action_taken`, `source_appl
 
 - Regex-based detection produces false positives on high-entropy random strings
 - Cannot inspect clipboard content from elevated/privileged processes on some OS configurations
-- Auto-clear may interfere with legitimate workflows if thresholds are too aggressive
-- No deep content inspection (file buffers, image data, rich text objects)
-- Linux clipboard hook support depends on X11; Wayland has limited clipboard API access
+- Polling-based monitoring (no OS clipboard hook on Linux; `WM_CLIPBOARDUPDATE` hook is a future improvement)
+- YARA detection is optional and requires the `yara` package
+- Linux clipboard access depends on `wl-paste`/`xclip`/`xsel`; source capture needs `xdotool` (X11)
 
 ---
 
@@ -305,8 +365,9 @@ This tool is designed against the following attacker profile:
 - ML-based content classification to reduce false positives
 - Integration with enterprise DLP platforms (Symantec, Microsoft Purview)
 - Behavioral analysis: detect clipboard polling by third-party processes
+- OS clipboard hooks (Windows `WM_CLIPBOARDUPDATE`, Linux `clipnotify`) to replace polling
 - Encrypted clipboard vault for secure temporary storage
-- Cross-device clipboard sync with end-to-end encryption
+- Auto-clear of sensitive clipboard content after configurable delay
 
 ---
 
@@ -340,9 +401,5 @@ Bachelor in Cybersecurity & Ethical Hacking
 ## ⭐ Acknowledgements
 
 - Real-world clipboard hijacking malware analysis (ClipBanker, Evrial, ComboJack)
-- Python open-source community: `pyperclip`, `pystray`, `plyer`
+- Python open-source community: `click`, `pyperclip`, `pystray`, `plyer`, `yara-python`
 - OWASP Data Leakage Prevention guidelines
--
-# how to run
-<code> PYTHONPATH=src python -m clipboard_dlp.app</code>
-- inorder to run this application
