@@ -4,5 +4,6 @@ venv/
 env/
 dist/
 build/
+docs/
 DOCUMENTS/
 *.pyc
