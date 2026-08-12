@@ -251,6 +251,8 @@ clipboard-dlp show-docs
 ```
 CLIPBOARD-DLP/
 │
+├── main.py                    # PyInstaller launcher (entry: packaged exe)
+├── ClipboardDLP.spec          # PyInstaller spec for Windows build
 ├── requirements.txt
 ├── scripts/
 │   └── build_windows.bat      # PyInstaller build for Windows
@@ -279,8 +281,47 @@ CLIPBOARD-DLP/
 │   ├── test_detector.py       ├── test_notifier.py
 │   └── test_ui.py
 │
-└── *.md                       # README, how-to-run, architecture docs
+├── docs/                      # Original project docs (install, usage, report)
+│   └── CW2_FULL_REPORT.md     # Full coursework report
+│
+├── DOCUMENTS/                 # Central documentation (see below)
+│   ├── README.md              # Index of all documents
+│   ├── architecture.md        # Module map, layers, concurrency, platforms
+│   ├── workflow.md            # End-to-end runtime flow
+│   ├── algorithm.md           # Detection regexes, entropy, risk tiers, backups
+│   ├── limitations.md         # Limitations + per-OS capability matrix
+│   ├── known-errors.md        # Errors faced (E1–E10) with root causes & fixes
+│   ├── thesis-evaluation.md   # Test evidence & material for the thesis report
+│   ├── security.md            # Threat model & security properties
+│   ├── testing.md             # Test suite layout & conventions
+│   ├── setup.md               # Installation & packaging
+│   ├── usage.md               # GUI/CLI usage guide
+│   ├── roadmap.md             # Future improvements
+│   └── ...                    # how-to-run, storage-strategy, tech & architecture
+│
+└── README.md
 ```
+
+---
+
+## 📚 Documentation
+
+All project documentation is centralized in [`DOCUMENTS/`](DOCUMENTS/README.md) — the
+index page links to every document:
+
+| Document | What it covers |
+|---|---|
+| [architecture.md](DOCUMENTS/architecture.md) | System layers, concurrency model, platform behavior |
+| [workflow.md](DOCUMENTS/workflow.md) | Runtime data flow: capture → store → detect → notify |
+| [algorithm.md](DOCUMENTS/algorithm.md) | Detection algorithms, entropy, risk tiers, backups |
+| [limitations.md](DOCUMENTS/limitations.md) | What cannot be done per OS + detection/monitoring limits |
+| [known-errors.md](DOCUMENTS/known-errors.md) | Every error faced (E1–E10): symptoms, root causes, fixes |
+| [thesis-evaluation.md](DOCUMENTS/thesis-evaluation.md) | Test evidence, SWOT, demo scenarios for the final report |
+| [security.md](DOCUMENTS/security.md) | Threat model, attack vectors, security properties |
+| [testing.md](DOCUMENTS/testing.md) | Test suite, isolation, conventions |
+| [setup.md](DOCUMENTS/setup.md) | Installation, dependencies, packaging |
+| [usage.md](DOCUMENTS/usage.md) | GUI/CLI usage, recovery, demo scenarios |
+| [roadmap.md](DOCUMENTS/roadmap.md) | Future improvements & accepted limitations |
 
 ---
 
