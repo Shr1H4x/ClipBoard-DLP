@@ -20,6 +20,15 @@ from .detector import detect_sensitive, strip_sensitive_copy_prefix, summarize_d
 from .notifier import notify
 
 
+def _error_log(msg: str) -> None:
+    try:
+        import traceback
+        with open(os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "clipboard_dlp", "error.log"), "a") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
+
 class Monitor(threading.Thread):
     def __init__(self, db, q: queue.Queue, interval=0.6, notifications=True, notify_cooldown=2.0):
         super().__init__(daemon=True)
@@ -46,48 +55,56 @@ class Monitor(threading.Thread):
 
     def run(self):
         while not self._stop.is_set():
-            if self._paused.is_set():
-                time.sleep(0.2); continue
-            text = safe_paste()
-            if not (text and isinstance(text, str)):
-                time.sleep(self.interval); continue
-            text = strip_sensitive_copy_prefix(text)
-            norm = text.replace("\r\n", "\n")
-            with self._last_lock:
-                last = self._last
-                last_ts = self._last_ts
-            now = time.time()
-            if last is not None and norm == (last.replace("\r\n", "\n")) and (now - last_ts) < self._cooldown:
-                time.sleep(self.interval); continue
             try:
-                db_last = self.db.last()
+                self._run_once()
             except Exception:
-                db_last = None
-            if db_last is not None and norm == db_last.replace("\r\n", "\n"):
-                with self._last_lock:
-                    self._last = text
-                    self._last_ts = now
-                time.sleep(self.interval); continue
+                import traceback
+                _error_log(traceback.format_exc())
+                time.sleep(self.interval)
 
-            # attempt to capture source (best-effort, throttled)
-            source = self._capture_source(text)
-            rid = self.db.add(text, source=source)
-            # run detection (regex + optional yara)
-            try:
-                detections = detect_sensitive(text)
-            except Exception:
-                detections = []
+    def _run_once(self):
+        if self._paused.is_set():
+            time.sleep(0.2); return
+        text = safe_paste()
+        if not (text and isinstance(text, str)):
+            time.sleep(self.interval); return
+        text = strip_sensitive_copy_prefix(text)
+        norm = text.replace("\r\n", "\n")
+        with self._last_lock:
+            last = self._last
+            last_ts = self._last_ts
+        now = time.time()
+        if last is not None and norm == (last.replace("\r\n", "\n")) and (now - last_ts) < self._cooldown:
+            time.sleep(self.interval); return
+        try:
+            db_last = self.db.last()
+        except Exception:
+            db_last = None
+        if db_last is not None and norm == db_last.replace("\r\n", "\n"):
             with self._last_lock:
                 self._last = text
                 self._last_ts = now
+            time.sleep(self.interval); return
 
-            # Fire a desktop notification for sensitive detections (throttled)
-            if detections:
-                self._maybe_notify(detections)
+        # attempt to capture source (best-effort, throttled)
+        source = self._capture_source(text)
+        rid = self.db.add(text, source=source)
+        # run detection (regex + optional yara)
+        try:
+            detections = detect_sensitive(text)
+        except Exception:
+            detections = []
+        with self._last_lock:
+            self._last = text
+            self._last_ts = now
 
-            # Put detections alongside the record so UI can react
-            self.q.put((rid, text, detections))
-            time.sleep(self.interval)
+        # Fire a desktop notification for sensitive detections (throttled)
+        if detections:
+            self._maybe_notify(detections)
+
+        # Put detections alongside the record so UI can react
+        self.q.put((rid, text, detections))
+        time.sleep(self.interval)
 
     def _maybe_notify(self, detections) -> None:
         if not self.notifications_enabled:
